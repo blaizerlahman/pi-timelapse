@@ -14,6 +14,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <sstream>
+#include <chrono>
+#include <condition_variable>
 
 #include <libcamera/libcamera.h>
 #include <libcamera/framebuffer.h>
@@ -21,10 +23,21 @@
 using namespace libcamera;
 using namespace std::chrono_literals;
 
+// width/height of camera frames
 int WIDTH = 1920;
 int HEIGHT = 1080;
 
+std::atomic<bool> shouldStop{false}; // used to dictate when frame requests should be stopped 
+
+std::mutex reqCompleteMutex;
+std::condition_variable reqCompleteCV;
+std::atomic<bool> requestCompleted{false};
+
+// time to be taken between frame captures
+std::chrono::milliseconds CAP_INTERVAL{300};
+
 static std::shared_ptr<Camera> camera;
+
 
 // captureless lambda that runs to set the global variable based on the CAM_FRAME_PATH env var
 std::filesystem::path FRAME_PATH = [] {
@@ -36,15 +49,11 @@ std::filesystem::path FRAME_PATH = [] {
   return std::filesystem::path(env);
 }(); // invoke now
 
-std::atomic<bool> shouldStop{false}; // used to dictate when frame requests should no longer be completed
 
 static void requestComplete(Request *request) {
 
-  if (request->status() == Request::RequestCancelled) {
-    return;
-  }
-
-  if (shouldStop.load()) {
+  // don't complete request if cancelled or timelapse has ended
+  if (request->status() == Request::RequestCancelled || shouldStop.load()) {
     return;
   }
 
@@ -121,11 +130,19 @@ static void requestComplete(Request *request) {
   }
 
   // only requeue if shouldn't stop
-  if (!shouldStop.load()) {
-    request->reuse(Request::ReuseBuffers);
-    camera->queueRequest(request);
+  //if (!shouldStop.load()) {
+  //  request->reuse(Request::ReuseBuffers);
+  //  camera->queueRequest(request);
+  //}
+
+  // notify main thread that frame has been processed
+  {
+    std::lock_guard<std::mutex> lock(reqCompleteMutex);
+    requestCompleted.store(true);
   }
+  reqCompleteCV.notify_one();
 }
+
 
 int main() {
 
@@ -152,7 +169,7 @@ int main() {
   camera->acquire();
 
   // create config for camera depending on the role you want
-  std::unique_ptr<CameraConfiguration> config = camera->generateConfiguration( { StreamRole::StillCapture });
+  std::unique_ptr<CameraConfiguration> config = camera->generateConfiguration( { StreamRole::Viewfinder });
 
   // use the stream config to configure the actual camera stream (size/format)
   StreamConfiguration &streamConfig = config->at(0);
@@ -231,19 +248,45 @@ int main() {
 
   // now we can actually start camera and queue requests for it
   camera->start();
-  for (std::unique_ptr<Request> &request : requests) {
-    camera->queueRequest(request.get());
+
+  auto millis = CAP_INTERVAL.count();
+
+  int seconds = 20;
+
+  const int totalFrames = (seconds * 1000) / millis;
+  for (int i = 0; i < totalFrames && !shouldStop.load(); i++) {
+
+    auto startTime = std::chrono::steady_clock::now();
+
+    if (i > 0) {
+
+      // wait until request is completed
+      std::unique_lock<std::mutex> lock(reqCompleteMutex); // grab mutex
+      reqCompleteCV.wait(lock, []{ return requestCompleted.load(); });
+
+      // requeue request
+      requestCompleted.store(false);
+      requests[0]->reuse(Request::ReuseBuffers);
+    }
+
+    camera->queueRequest(requests[0].get()); // requeue request
+
+    auto timeSince = std::chrono::steady_clock::now() - startTime;
+    auto timeLeft = CAP_INTERVAL - timeSince;
+
+    // sleep for any remaining time until next frame capture
+    if (timeLeft > 0ms) std::this_thread::sleep_for(timeLeft);
   }
 
   // the actual event processing occurs in an internal thread, so the application can manage its own execution in its own thread
   // basically only has to respond to events emitted through signals
   // example: let record for 5 seconds while libcamera generates completion events that
   // the app will handle in requestComplete() slot function connected to the Camera::requstCompleted signal
-  std::this_thread::sleep_for(10000ms);
+  //std::this_thread::sleep_for(10000ms);
 
   shouldStop.store(true); // stop the requesting of frames
 
-  std::this_thread::sleep_for(300ms); // allow any currently processing frames to finsih
+  //std::this_thread::sleep_for(300ms); // allow any currently processing frames to finsih
 
   // now we can clean ip and stop the camera
   // need to first stop camera
