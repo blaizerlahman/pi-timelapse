@@ -50,6 +50,19 @@ std::filesystem::path FRAME_PATH = [] {
 }(); // invoke now
 
 
+// check that inputted timelapse length only contains digits
+bool validTimelapseLength(std::string length) {
+
+  for (unsigned char c : length) {
+    if (!std::isdigit(c)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+
 static void requestComplete(Request *request) {
 
   // don't complete request if cancelled or timelapse has ended
@@ -144,9 +157,34 @@ static void requestComplete(Request *request) {
 }
 
 
-int main() {
+int main(int argc, char* argv[]) {
 
-  // create camera manager before anything else and start it
+  int err = 0;
+  int timelapseLength = 0;
+
+  // validate input arguments
+  if (argc > 2) {
+    std::cout << "Usage: camera or camera <timelapse length in minutes>" << std::endl;
+    err = 1;
+    return err;
+  } else if (argc == 2) {
+
+    std::string arg = argv[1];
+
+    if (!validTimelapseLength(arg)) {
+      std::cerr << "Timelapse length must only contain digits" << std::endl;
+      err = 1;
+      return err;
+    }
+
+    timelapseLength = std::stoi(arg);
+    if (timelapseLength < 0) {
+      std::cerr << "Timelapse length must be positive" << std::endl;
+      err = 1;
+      return err;
+    }
+  }
+
   std::unique_ptr<CameraManager> cm = std::make_unique<CameraManager>();
   cm->start();
 
@@ -161,14 +199,11 @@ int main() {
     return EXIT_FAILURE;
   }
 
-  // assign a camera using its ID
   std::string cameraId = cameras[0]->id();
   camera = cm->get(cameraId);
 
-  // acquire camera
   camera->acquire();
 
-  // create config for camera depending on the role you want
   std::unique_ptr<CameraConfiguration> config = camera->generateConfiguration( { StreamRole::Viewfinder });
 
   // use the stream config to configure the actual camera stream (size/format)
@@ -189,11 +224,6 @@ int main() {
   // now that it has been validated we can give it to the camera
   camera->configure(config.get());
 
-  // now need to allocate FrameBuffers so libcamera can write incoming frames to them (and app can read them)
-  // amount of memory reserved should be based on configured image size/format
-  // libcamera consumes buffers, should usually be provided by application but
-  // if only on same device (like the Pi) you can use a FrameBufferAllocator to allocate manually
-  
   FrameBufferAllocator *allocator = new FrameBufferAllocator(camera);
 
   // go into config and allocate FrameBuffers and see how many buffers were allocated
@@ -225,7 +255,6 @@ int main() {
       return -ENOMEM;
     }
 
-    // get buffer
     const std::unique_ptr<FrameBuffer> &buffer = buffers[i];
 
     // add buffer to request so it can be filled by it
@@ -238,22 +267,14 @@ int main() {
     requests.push_back(std::move(request));
   }
 
-  // can notify app that a buffer with data is available and also that a requst has been completed
-  // a request being completed would mean that all the buffers the request contains ahve been completed
-  // request completions are registers in the same order as the requests were queued to the camera in
+  camera->requestCompleted.connect(requestComplete); 
 
-  camera->requestCompleted.connect(requestComplete); // requestComplete is a slot function that handles the app accessing the image data
-
-  // EXAMPLE OF HOW TO WRITE IMAGE DATA TO DISK IS IN FileSink CLASS WHICH IS PART OF THE cam UTILITY APPLICATION
-
-  // now we can actually start camera and queue requests for it
   camera->start();
 
-  auto millis = CAP_INTERVAL.count();
+  // set length of timelapse in minutes to be inputted time if given or a full day if not given
+  int minutes = (timelapseLength > -1) ? timelapseLength : 1440;
 
-  int seconds = 20;
-
-  const int totalFrames = (seconds * 1000) / millis;
+  const int totalFrames = (minutes * 60 * 1000) / (CAP_INTERVAL.count());
   for (int i = 0; i < totalFrames && !shouldStop.load(); i++) {
 
     auto startTime = std::chrono::steady_clock::now();
@@ -264,7 +285,6 @@ int main() {
       std::unique_lock<std::mutex> lock(reqCompleteMutex); // grab mutex
       reqCompleteCV.wait(lock, []{ return requestCompleted.load(); });
 
-      // requeue request
       requestCompleted.store(false);
       requests[0]->reuse(Request::ReuseBuffers);
     }
@@ -278,27 +298,15 @@ int main() {
     if (timeLeft > 0ms) std::this_thread::sleep_for(timeLeft);
   }
 
-  // the actual event processing occurs in an internal thread, so the application can manage its own execution in its own thread
-  // basically only has to respond to events emitted through signals
-  // example: let record for 5 seconds while libcamera generates completion events that
-  // the app will handle in requestComplete() slot function connected to the Camera::requstCompleted signal
-  //std::this_thread::sleep_for(10000ms);
+  shouldStop.store(true); 
 
-  shouldStop.store(true); // stop the requesting of frames
-
-  //std::this_thread::sleep_for(300ms); // allow any currently processing frames to finsih
-
-  // now we can clean ip and stop the camera
-  // need to first stop camera
   camera->stop();
-
   allocator->free(stream); // free the buffers in the FrameBufferAllocator
   delete allocator;
 
-  camera->release(); // release lock on camera
-  camera.reset(); // reset its pointer
-
-  cm->stop(); // stop camera manager
+  camera->release();
+  camera.reset(); 
+  cm->stop(); 
   
   return 0;
 }
