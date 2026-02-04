@@ -16,6 +16,7 @@
 #include <sstream>
 #include <chrono>
 #include <condition_variable>
+#include <csignal>
 
 #include <libcamera/libcamera.h>
 #include <libcamera/framebuffer.h>
@@ -60,6 +61,12 @@ bool validTimelapseLength(std::string length) {
   }
 
   return true;
+}
+
+
+// handle stop signals by ending frame processing after current one is finished
+void interruptHandler(int signum) {
+  shouldStop.store(true);
 }
 
 
@@ -185,6 +192,8 @@ int main(int argc, char* argv[]) {
     }
   }
 
+  std::signal(SIGINT, interruptHandler);
+
   std::unique_ptr<CameraManager> cm = std::make_unique<CameraManager>();
   cm->start();
 
@@ -272,7 +281,7 @@ int main(int argc, char* argv[]) {
   camera->start();
 
   // set length of timelapse in minutes to be inputted time if given or a full day if not given
-  int minutes = (timelapseLength > -1) ? timelapseLength : 1440;
+  int minutes = (timelapseLength > 0) ? timelapseLength : 1440;
 
   const int totalFrames = (minutes * 60 * 1000) / (CAP_INTERVAL.count());
   for (int i = 0; i < totalFrames && !shouldStop.load(); i++) {
@@ -284,6 +293,8 @@ int main(int argc, char* argv[]) {
       // wait until request is completed
       std::unique_lock<std::mutex> lock(reqCompleteMutex); // grab mutex
       reqCompleteCV.wait(lock, []{ return requestCompleted.load(); });
+
+      if (shouldStop.load()) break; // break loop without requeuing if stop requested
 
       requestCompleted.store(false);
       requests[0]->reuse(Request::ReuseBuffers);
@@ -297,6 +308,12 @@ int main(int argc, char* argv[]) {
     // sleep for any remaining time until next frame capture
     if (timeLeft > 0ms) std::this_thread::sleep_for(timeLeft);
   }
+
+  if (shouldStop.load()) {
+    std::cout << "\nInterrupt received, finishing current frame..." << std::endl;
+  }
+
+  std::this_thread::sleep_for(300ms); // allow time for any remaining frame to process
 
   shouldStop.store(true); 
 
