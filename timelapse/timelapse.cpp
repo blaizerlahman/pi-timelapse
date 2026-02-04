@@ -1,3 +1,5 @@
+#include "timelapse.h"
+
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -51,21 +53,11 @@ std::filesystem::path FRAME_PATH = [] {
 }(); // invoke now
 
 
-// check that inputted timelapse length only contains digits
-bool validTimelapseLength(std::string length) {
-
-  for (unsigned char c : length) {
-    if (!std::isdigit(c)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-
 // handle stop signals by ending frame processing after current one is finished
 void interruptHandler(int signum) {
+  if (signum) {
+    //keep the compiler happy
+  } 
   shouldStop.store(true);
 }
 
@@ -164,33 +156,7 @@ static void requestComplete(Request *request) {
 }
 
 
-int main(int argc, char* argv[]) {
-
-  int err = 0;
-  int timelapseLength = 0;
-
-  // validate input arguments
-  if (argc > 2) {
-    std::cout << "Usage: camera or camera <timelapse length in minutes>" << std::endl;
-    err = 1;
-    return err;
-  } else if (argc == 2) {
-
-    std::string arg = argv[1];
-
-    if (!validTimelapseLength(arg)) {
-      std::cerr << "Timelapse length must only contain digits" << std::endl;
-      err = 1;
-      return err;
-    }
-
-    timelapseLength = std::stoi(arg);
-    if (timelapseLength < 0) {
-      std::cerr << "Timelapse length must be positive" << std::endl;
-      err = 1;
-      return err;
-    }
-  }
+int timelapseHandler(int timelapseLength) {
 
   std::signal(SIGINT, interruptHandler);
 
@@ -255,7 +221,7 @@ int main(int argc, char* argv[]) {
   std::vector<std::unique_ptr<Request>> requests;
 
   // fill requests by created Request instances for the camera and assocaite a buffer with each of them
-  for (int i = 0; i < buffers.size(); i++) {
+  for (unsigned int i = 0; i < buffers.size(); i++) {
 
     // create request
     std::unique_ptr<Request> request = camera->createRequest();
@@ -327,3 +293,5 @@ int main(int argc, char* argv[]) {
   
   return 0;
 }
+
+
