@@ -179,116 +179,124 @@ int timelapseHandler(int timelapseLength) {
 
   camera->acquire();
 
-  std::unique_ptr<CameraConfiguration> config = camera->generateConfiguration( { StreamRole::Viewfinder });
+  {
+    std::unique_ptr<CameraConfiguration> config = camera->generateConfiguration( { StreamRole::Viewfinder });
 
-  // use the stream config to configure the actual camera stream (size/format)
-  StreamConfiguration &streamConfig = config->at(0);
-  std::cout << "Default viewfinder configuration is: " << streamConfig.toString() << std::endl;
+    // use the stream config to configure the actual camera stream (size/format)
+    StreamConfiguration &streamConfig = config->at(0);
+    std::cout << "Default viewfinder configuration is: " << streamConfig.toString() << std::endl;
 
-  // camera dependent
-  streamConfig.size.width = WIDTH;
-  streamConfig.size.height = HEIGHT;
+    // camera dependent
+    streamConfig.size.width = WIDTH;
+    streamConfig.size.height = HEIGHT;
 
-  // will give plane 0/1/2 = Y/U/V
-  streamConfig.pixelFormat = formats::YUV420;
+    // will give plane 0/1/2 = Y/U/V
+    streamConfig.pixelFormat = formats::YUV420;
 
-  // now must validate the updated configuration to ensure it is okay (may change parameters to closest suitable ones)
-  config->validate();
-  std::cout << "Validated viewfinder config is: " << streamConfig.toString() << std::endl;
+    // now must validate the updated configuration to ensure it is okay (may change parameters to closest suitable ones)
+    config->validate();
+    std::cout << "Validated viewfinder config is: " << streamConfig.toString() << std::endl;
 
-  // now that it has been validated we can give it to the camera
-  camera->configure(config.get());
+    // now that it has been validated we can give it to the camera
+    camera->configure(config.get());
 
-  FrameBufferAllocator *allocator = new FrameBufferAllocator(camera);
+    FrameBufferAllocator *allocator = new FrameBufferAllocator(camera);
 
-  // go into config and allocate FrameBuffers and see how many buffers were allocated
-  for (StreamConfiguration &cfg : *config) {
-    int ret = allocator->allocate(cfg.stream());
-    if (ret < 0) {
-      std::cerr << "Can't alloc buffers" << std::endl;
-      return -ENOMEM;
+    // go into config and allocate FrameBuffers and see how many buffers were allocated
+    for (StreamConfiguration &cfg : *config) {
+      int ret = allocator->allocate(cfg.stream());
+      if (ret < 0) {
+        std::cerr << "Can't alloc buffers" << std::endl;
+        delete allocator;
+        return -ENOMEM;
+      }
+
+      size_t allocated = allocator->buffers(cfg.stream()).size();
+      std::cout << "Allocated " << allocated << " buffers for stream" << std::endl;
     }
 
-    size_t allocated = allocator->buffers(cfg.stream()).size();
-    std::cout << "Allocated " << allocated << " buffers for stream" << std::endl;
-  }
+    // libcamera uses streaming model per-frame
+    // app must queue a request for each frame it wants
+    // Request = one Stream associated with a FrameBuffer representing where frames iwll be stored
+    Stream *stream = streamConfig.stream();
+    const std::vector<std::unique_ptr<FrameBuffer>> &buffers = allocator->buffers(stream);
+    std::vector<std::unique_ptr<Request>> requests;
 
-  // libcamera uses streaming model per-frame
-  // app must queue a request for each frame it wants
-  // Request = one Stream associated with a FrameBuffer representing where frames iwll be stored
-  Stream *stream = streamConfig.stream();
-  const std::vector<std::unique_ptr<FrameBuffer>> &buffers = allocator->buffers(stream);
-  std::vector<std::unique_ptr<Request>> requests;
+    // fill requests by created Request instances for the camera and assocaite a buffer with each of them
+    for (unsigned int i = 0; i < buffers.size(); i++) {
 
-  // fill requests by created Request instances for the camera and assocaite a buffer with each of them
-  for (unsigned int i = 0; i < buffers.size(); i++) {
+      // create request
+      std::unique_ptr<Request> request = camera->createRequest();
+      if (!request) {
+        std::cerr << "Can't create request" << std::endl;
+        return -ENOMEM;
+      }
 
-    // create request
-    std::unique_ptr<Request> request = camera->createRequest();
-    if (!request) {
-      std::cerr << "Can't create request" << std::endl;
-      return -ENOMEM;
+      const std::unique_ptr<FrameBuffer> &buffer = buffers[i];
+
+      // add buffer to request so it can be filled by it
+      int ret = request->addBuffer(stream, buffer.get());
+      if (ret < 0) {
+        std::cerr << "Can't set buffer for reqeust" << std::endl;
+        return ret;
+      }
+
+      requests.push_back(std::move(request));
     }
 
-    const std::unique_ptr<FrameBuffer> &buffer = buffers[i];
+    camera->requestCompleted.connect(requestComplete); 
 
-    // add buffer to request so it can be filled by it
-    int ret =request->addBuffer(stream, buffer.get());
-    if (ret < 0) {
-      std::cerr << "Can't set buffer for reqeust" << std::endl;
-      return ret;
+    camera->start();
+
+    // set length of timelapse in minutes to be inputted time if given or a full day if not given
+    int minutes = (timelapseLength > 0) ? timelapseLength : 1440;
+
+    const int totalFrames = (minutes * 60 * 1000) / (CAP_INTERVAL.count());
+    for (int i = 0; i < totalFrames && !shouldStop.load(); i++) {
+
+      auto startTime = std::chrono::steady_clock::now();
+
+      if (i > 0) {
+
+        // wait until request is completed
+        std::unique_lock<std::mutex> lock(reqCompleteMutex); // grab mutex
+        reqCompleteCV.wait(lock, []{ return requestCompleted.load(); });
+
+        if (shouldStop.load()) break; // break loop without requeuing if stop requested
+
+        requestCompleted.store(false);
+        requests[0]->reuse(Request::ReuseBuffers);
+      }
+
+      camera->queueRequest(requests[0].get()); // requeue request
+
+      auto timeSince = std::chrono::steady_clock::now() - startTime;
+      auto timeLeft = CAP_INTERVAL - timeSince;
+
+      // sleep for any remaining time until next frame capture
+      if (timeLeft > 0ms) std::this_thread::sleep_for(timeLeft);
     }
 
-    requests.push_back(std::move(request));
-  }
-
-  camera->requestCompleted.connect(requestComplete); 
-
-  camera->start();
-
-  // set length of timelapse in minutes to be inputted time if given or a full day if not given
-  int minutes = (timelapseLength > 0) ? timelapseLength : 1440;
-
-  const int totalFrames = (minutes * 60 * 1000) / (CAP_INTERVAL.count());
-  for (int i = 0; i < totalFrames && !shouldStop.load(); i++) {
-
-    auto startTime = std::chrono::steady_clock::now();
-
-    if (i > 0) {
-
-      // wait until request is completed
-      std::unique_lock<std::mutex> lock(reqCompleteMutex); // grab mutex
-      reqCompleteCV.wait(lock, []{ return requestCompleted.load(); });
-
-      if (shouldStop.load()) break; // break loop without requeuing if stop requested
-
-      requestCompleted.store(false);
-      requests[0]->reuse(Request::ReuseBuffers);
+    if (shouldStop.load()) {
+      std::cout << "\nInterrupt received, finishing current frame..." << std::endl;
     }
 
-    camera->queueRequest(requests[0].get()); // requeue request
+    std::this_thread::sleep_for(300ms); // allow time for any remaining frame to process
 
-    auto timeSince = std::chrono::steady_clock::now() - startTime;
-    auto timeLeft = CAP_INTERVAL - timeSince;
+    shouldStop.store(true); 
 
-    // sleep for any remaining time until next frame capture
-    if (timeLeft > 0ms) std::this_thread::sleep_for(timeLeft);
+    camera->requestCompleted.disconnect(requestComplete); // disconnect signal
+    requests.clear();
+
+    camera->stop();
+
+    allocator->free(stream); // free the buffers in the FrameBufferAllocator
+    delete allocator;
   }
-
-  if (shouldStop.load()) {
-    std::cout << "\nInterrupt received, finishing current frame..." << std::endl;
-  }
-
-  std::this_thread::sleep_for(300ms); // allow time for any remaining frame to process
-
-  shouldStop.store(true); 
-
-  camera->stop();
-  allocator->free(stream); // free the buffers in the FrameBufferAllocator
-  delete allocator;
 
   camera->release();
   camera.reset(); 
+
   cm->stop(); 
   
   return 0;
