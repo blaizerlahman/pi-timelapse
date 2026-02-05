@@ -5,17 +5,40 @@
 #include <iostream>
 #include <thread>
 #include <atomic>
+#include <condition_variable>
+#include <csignal>
 
 extern std::atomic<bool> shouldStop;
+
 extern std::filesystem::path FRAME_PATH;
+
+static httplib::Server *globalServer = nullptr;
+
+// first handles interrupting a timelapse if currently running, then interrupts server
+void interruptHandler(int signum) {
+  if (signum) {
+    //keep the compiler happy
+  }
+
+  shouldStop.store(true); // begin camera shutdown by stopping stream
+
+  if (globalServer) {
+    globalServer->stop();
+  }
+}
 
 int main() {
 
+  std::signal(SIGINT, interruptHandler);
+
   httplib::Server svr;
+  globalServer = &svr;
+
+  std::unique_ptr<std::thread> camThread;
 
   std::atomic<bool> isCamRunning{false};
 
-  svr.Get("/start-cam", [&isCamRunning](const httplib::Request& req, httplib::Response& res) {
+  svr.Get("/start-cam", [&isCamRunning, &camThread](const httplib::Request& req, httplib::Response& res) {
     
     if (isCamRunning.load()) {
       std::cerr << "Camera has already been started." << std::endl;
@@ -33,14 +56,12 @@ int main() {
       isCamRunning.store(true);
       shouldStop.store(false);
 
-      std::thread t1([length, &isCamRunning]() {
+      camThread = std::make_unique<std::thread>([length, &isCamRunning]() {
           int err = timelapseHandler(length);
           isCamRunning.store(false);
           
           std::cout << "Timelapse finished with code " << err << std::endl;
       });
-
-      t1.detach();
 
       res.set_content("Timelapse started\n", "text/plain");
     }
@@ -103,4 +124,18 @@ int main() {
   });
 
   svr.listen("0.0.0.0", 8000);
+
+  if (camThread) std::cout << "Server stopped, waiting for camera to finish..." << std::endl;
+
+  if (camThread) {
+    std::cout << "Server stopped, waiting for camera to finish..." << std::endl;
+    if (camThread->joinable()) {
+      camThread->join();
+    }
+    std::cout << "Camera shutdown complete." << std::endl;
+  }
+
+  globalServer = nullptr;
+
+  return 0;
 }

@@ -2,9 +2,12 @@
 #define TIMELAPSE_H
 
 #include <atomic>
+#include <mutex>
+#include <condition_variable>
 #include <filesystem>
 
 extern std::atomic<bool> shouldStop;
+
 extern std::filesystem::path FRAME_PATH;
 
 /**

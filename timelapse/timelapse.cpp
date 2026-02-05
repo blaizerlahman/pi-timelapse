@@ -53,19 +53,23 @@ std::filesystem::path FRAME_PATH = [] {
 }(); // invoke now
 
 
-// handle stop signals by ending frame processing after current one is finished
-void interruptHandler(int signum) {
-  if (signum) {
-    //keep the compiler happy
-  } 
-  shouldStop.store(true);
-}
-
-
 static void requestComplete(Request *request) {
 
+  // exit if during shutdown
+  if (shouldStop.load()) {
+
+    // notify main thread
+    {
+      std::lock_guard<std::mutex> lock(reqCompleteMutex);
+      requestCompleted.store(true);
+    }
+
+    reqCompleteCV.notify_one();
+    return;
+  }
+
   // don't complete request if cancelled or timelapse has ended
-  if (request->status() == Request::RequestCancelled || shouldStop.load()) {
+  if (request->status() == Request::RequestCancelled) {
     return;
   }
 
@@ -157,8 +161,6 @@ static void requestComplete(Request *request) {
 
 
 int timelapseHandler(int timelapseLength) {
-
-  std::signal(SIGINT, interruptHandler);
 
   std::unique_ptr<CameraManager> cm = std::make_unique<CameraManager>();
   cm->start();
@@ -281,9 +283,9 @@ int timelapseHandler(int timelapseLength) {
       std::cout << "\nInterrupt received, finishing current frame..." << std::endl;
     }
 
-    std::this_thread::sleep_for(300ms); // allow time for any remaining frame to process
-
     shouldStop.store(true); 
+
+    std::this_thread::sleep_for(300ms); // give time for last frames to finish
 
     camera->requestCompleted.disconnect(requestComplete); // disconnect signal
     requests.clear();
@@ -298,7 +300,7 @@ int timelapseHandler(int timelapseLength) {
   camera.reset(); 
 
   cm->stop(); 
-  
+
   return 0;
 }
 
