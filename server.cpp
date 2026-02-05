@@ -14,18 +14,25 @@ extern std::filesystem::path FRAME_PATH;
 
 static httplib::Server *globalServer = nullptr;
 
+
+void shutdownServer() {
+  shouldStop.store(true);
+
+  if (globalServer) {
+    globalServer->stop();
+  }
+}
+
+
 // first handles interrupting a timelapse if currently running, then interrupts server
 void interruptHandler(int signum) {
   if (signum) {
     //keep the compiler happy
   }
 
-  shouldStop.store(true); // begin camera shutdown by stopping stream
-
-  if (globalServer) {
-    globalServer->stop();
-  }
+  shutdownServer();
 }
+
 
 int main() {
 
@@ -126,6 +133,13 @@ int main() {
       } 
     }
 
+  });
+
+  svr.Get("/shutdown", [](const httplib::Request& req, httplib::Response& res) {
+    std::cout << "Shutting down server" << std::endl;
+    res.set_content("Shutting down...\n", "text/plain");
+
+    shutdownServer();
   });
 
   svr.listen("0.0.0.0", 8000);
