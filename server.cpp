@@ -47,6 +47,11 @@ int main() {
 
       std::cout << "CAMERA STARTED by " << req.remote_addr << std::endl;
 
+      // join previous thread if it exists
+      if (camThread && camThread->joinable()) {
+        camThread->join();
+      }
+
       int length = 0;
       if (req.has_param("length")) {
         std::string lengthStr = req.get_param_value("length");
