@@ -1,6 +1,6 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra $(shell pkg-config --cflags libcamera)
-LDFLAGS = $(shell pkg-config --libs libcamera) -lpthread
+LDFLAGS = $(shell pkg-config --libs libcamera) -lpthread -ljpeg
 
 all: timelapse
 
