@@ -101,6 +101,21 @@ int main() {
     }
   });
 
+  svr.Get("/create-timelapse", [&isCamRunning](const httplib::Request& req, httplib::Response& res) {
+
+    if (isCamRunning.load()) {
+      std::cerr << "Camera is currently running, cannot create timelapse" << std::endl;
+      res.set_content("Error: cannot create timelapse, camera is currently running.\n", "text/plain");
+    } else {
+
+      std::cout << "CREATING TIMELAPSE..." << std::endl;
+
+
+      std::cout << "Succesfully created timelapse" << std::endl;
+      res.set_content("Timelapse has been created\n", "text/plain");
+    }
+  });
+
   svr.Get("/clear-frames", [&isCamRunning](const httplib::Request& req, httplib::Response& res) {
     if (isCamRunning.load()) {
       std::cerr << "Frames attempted to clear while camera running" << std::endl;

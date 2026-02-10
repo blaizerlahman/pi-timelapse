@@ -44,13 +44,24 @@ int TIMELAPSE_LENGTH = 1440; // in min
 static std::shared_ptr<Camera> camera;
 
 
+// get path to where frames will be stored
 std::filesystem::path FRAME_PATH = [] {
-  const char* env = std::getenv("CAM_FRAME_PATH");
-  if (!env) {
+  const char* framePath = std::getenv("CAM_FRAME_PATH");
+  if (!framePath) {
     throw std::runtime_error("CAM_FRAME_PATH not set");
   }
-  return std::filesystem::path(env);
+  return std::filesystem::path(framePath);
 }();
+
+
+// get path to where final timelapse will be stored
+std::filesystem::path TIMELAPSE_PATH = [] {
+  const char* timelapsePath = std::getenv("CAM_TIMELAPSE_PATH");
+  if (!timelapsePath) {
+    throw std::runtime_error("CAM_TIMELAPSE_PATH");
+  }
+  return std::filesystem::path(timelapsePath);
+}
 
 
 static void requestComplete(Request *request) {
@@ -170,7 +181,7 @@ static void requestComplete(Request *request) {
 }
 
 
-int timelapseHandler(int timelapseLength = 0, int capInterval = 0) {
+int recordTimelapseHandler(int timelapseLength = 0, int capInterval = 0) {
 
   std::unique_ptr<CameraManager> cm = std::make_unique<CameraManager>();
   cm->start();
@@ -295,4 +306,10 @@ int timelapseHandler(int timelapseLength = 0, int capInterval = 0) {
   cm->stop();
 
   return 0;
+}
+
+
+int createTimelapseHandler(int fps, int preset, int crf) {
+
+  
 }
