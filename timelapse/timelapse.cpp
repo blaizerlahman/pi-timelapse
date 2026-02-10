@@ -37,9 +37,12 @@ std::mutex reqCompleteMutex;
 std::condition_variable reqCompleteCV;
 std::atomic<bool> requestCompleted{false};
 
-std::chrono::milliseconds CAP_INTERVAL{300};
+// default frame capture is 2/sec and length is 1 day
+int CAP_INTERVAL = 500; // in ms
+int TIMELAPSE_LENGTH = 1440; // in min
 
 static std::shared_ptr<Camera> camera;
+
 
 std::filesystem::path FRAME_PATH = [] {
   const char* env = std::getenv("CAM_FRAME_PATH");
@@ -121,7 +124,7 @@ static void requestComplete(Request *request) {
 
     jpeg_stdio_dest(&cinfo, outfile);
 
-    // Sst compression parameters
+    // sst compression parameters
     cinfo.image_width = WIDTH;
     cinfo.image_height = HEIGHT;
     cinfo.input_components = 3;
@@ -167,7 +170,7 @@ static void requestComplete(Request *request) {
 }
 
 
-int timelapseHandler(int timelapseLength) {
+int timelapseHandler(int timelapseLength = 0, int capInterval = 0) {
 
   std::unique_ptr<CameraManager> cm = std::make_unique<CameraManager>();
   cm->start();
@@ -196,7 +199,7 @@ int timelapseHandler(int timelapseLength) {
 
     streamConfig.size.width = WIDTH;
     streamConfig.size.height = HEIGHT;
-    streamConfig.pixelFormat = formats::YUV420;  // Keep YUV420
+    streamConfig.pixelFormat = formats::YUV420;
 
     config->validate();
     std::cout << "Validated VideoRecording config is: " << streamConfig.toString() << std::endl;
@@ -243,9 +246,10 @@ int timelapseHandler(int timelapseLength) {
 
     camera->start();
 
-    int minutes = (timelapseLength > 0) ? timelapseLength : 1440;
+    capInterval = (capInterval > 0) ? capInterval : CAP_INTERVAL;
+    timelapseLength = (timelapseLength > 0) ? timelapseLength : TIMELAPSE_LENGTH;
 
-    const int totalFrames = (minutes * 60 * 1000) / (CAP_INTERVAL.count());
+    const int totalFrames = (timelapseLength * 60 * 1000) / capInterval;
     for (int i = 0; i < totalFrames && !shouldStop.load(); i++) {
 
       auto startTime = std::chrono::steady_clock::now();
@@ -263,7 +267,7 @@ int timelapseHandler(int timelapseLength) {
       camera->queueRequest(requests[0].get());
 
       auto timeSince = std::chrono::steady_clock::now() - startTime;
-      auto timeLeft = CAP_INTERVAL - timeSince;
+      auto timeLeft = std::chrono::milliseconds(capInterval) - timeSince;
 
       if (timeLeft > 0ms) std::this_thread::sleep_for(timeLeft);
     }

@@ -15,6 +15,6 @@ extern std::filesystem::path FRAME_PATH;
  * @param timelapseLength Length of timelapse in minutes (default is 0 which evaluates to 24 hours)
  * @return 0 on success, non-zero on error
  */
-int timelapseHandler(int timelapseLength);
+int timelapseHandler(int timelapseLength, int capInterval);
 
 #endif

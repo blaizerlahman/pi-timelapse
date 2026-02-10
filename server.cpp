@@ -65,11 +65,17 @@ int main() {
         length = std::stoi(lengthStr);
       }
 
+      int capInterval = 0;
+      if (req.has_param("cap-interval")) {
+        std::string intervalStr = req.get_param_value("cap-interval");
+        capInterval = std::stoi(intervalStr);
+      }
+
       isCamRunning.store(true);
       shouldStop.store(false);
 
-      camThread = std::make_unique<std::thread>([length, &isCamRunning]() {
-          int err = timelapseHandler(length);
+      camThread = std::make_unique<std::thread>([length, capInterval, &isCamRunning]() {
+          int err = timelapseHandler(length, capInterval);
           isCamRunning.store(false);
           
           std::cout << "Timelapse finished with code " << err << std::endl;
@@ -132,7 +138,6 @@ int main() {
         res.set_content("Frames have been successfully cleared\n", "text/plain");
       } 
     }
-
   });
 
   svr.Get("/shutdown", [](const httplib::Request& req, httplib::Response& res) {
