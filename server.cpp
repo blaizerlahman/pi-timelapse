@@ -12,6 +12,7 @@
 extern std::atomic<bool> shouldStop;
 
 extern std::filesystem::path FRAME_PATH;
+extern std::filesystem::path TIMELAPSE_PATH;
 
 static httplib::Server *globalServer = nullptr;
 
@@ -119,6 +120,18 @@ int main() {
       res.set_content("Error: cannot create timelapse, timelapse is already being created.\n", "text/plain");
     } else {
 
+      // check if directory has frames
+      if (std::filesystem::is_empty(FRAME_PATH)) {
+        std::cerr << "Cannot create timelapse, no frames in frame directory" << std::endl;
+        res.set_content("Error: cannot create timelapse, there are no frames in frame directory.\n", "text/plain");
+      }
+
+      // check if timelapse directory exists
+      if (std::filesystem::exists(TIMELAPSE_PATH) && std::filesystem::is_directory(TIMELAPSE_PATH)) {
+        std::cerr << "Cannot create timelapse, the timelapse path does not point to an existing directory" << std::endl;
+        res.set_content("Error: cannot create timelapse, the timelapse path does not point to an existing directory.\n", "text/plain");
+      }
+
       int fps = 0;
       int preset = 0;
       int crf = -1;
@@ -158,7 +171,6 @@ int main() {
     } else {
 
       std::cout << "Clearing frames..." << std::endl;
-
 
       // remove all regular files in frame directory if specified
       if (req.has_param("all")) {
