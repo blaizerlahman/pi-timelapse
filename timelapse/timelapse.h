@@ -6,10 +6,10 @@
 #include <condition_variable>
 #include <filesystem>
 
-extern std::atomic<bool> shouldStop;
+extern std::atomic<bool> shouldRecordStop;
+extern std::atomic<bool> shouldCreateStop;
 
 extern std::filesystem::path FRAME_PATH;
-
 extern std::filesystem::path TIMELAPSE_PATH;
 
 /**

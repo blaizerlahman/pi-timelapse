@@ -19,6 +19,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #include <libcamera/libcamera.h>
 #include <libcamera/framebuffer.h>
@@ -31,7 +33,8 @@ using namespace std::chrono_literals;
 int WIDTH = 1920;
 int HEIGHT = 1080;
 
-std::atomic<bool> shouldStop{false};
+std::atomic<bool> shouldRecordStop{false};
+std::atomic<bool> shouldCreateStop{false};
 
 std::mutex reqCompleteMutex;
 std::condition_variable reqCompleteCV;
@@ -61,12 +64,12 @@ std::filesystem::path TIMELAPSE_PATH = [] {
     throw std::runtime_error("CAM_TIMELAPSE_PATH");
   }
   return std::filesystem::path(timelapsePath);
-}
+}();
 
 
 static void requestComplete(Request *request) {
 
-  if (shouldStop.load()) {
+  if (shouldRecordStop.load()) {
     {
       std::lock_guard<std::mutex> lock(reqCompleteMutex);
       requestCompleted.store(true);
@@ -261,7 +264,7 @@ int recordTimelapseHandler(int timelapseLength = 0, int capInterval = 0) {
     timelapseLength = (timelapseLength > 0) ? timelapseLength : TIMELAPSE_LENGTH;
 
     const int totalFrames = (timelapseLength * 60 * 1000) / capInterval;
-    for (int i = 0; i < totalFrames && !shouldStop.load(); i++) {
+    for (int i = 0; i < totalFrames && !shouldRecordStop.load(); i++) {
 
       auto startTime = std::chrono::steady_clock::now();
 
@@ -269,7 +272,7 @@ int recordTimelapseHandler(int timelapseLength = 0, int capInterval = 0) {
         std::unique_lock<std::mutex> lock(reqCompleteMutex);
         reqCompleteCV.wait(lock, []{ return requestCompleted.load(); });
 
-        if (shouldStop.load()) break;
+        if (shouldRecordStop.load()) break;
 
         requestCompleted.store(false);
         requests[0]->reuse(Request::ReuseBuffers);
@@ -283,11 +286,11 @@ int recordTimelapseHandler(int timelapseLength = 0, int capInterval = 0) {
       if (timeLeft > 0ms) std::this_thread::sleep_for(timeLeft);
     }
 
-    if (shouldStop.load()) {
+    if (shouldRecordStop.load()) {
       std::cout << "\nInterrupt received, finishing current frame..." << std::endl;
     }
 
-    shouldStop.store(true);
+    shouldRecordStop.store(true);
 
     std::this_thread::sleep_for(300ms);
 
@@ -326,8 +329,108 @@ const std::string getPreset(Preset preset) {
   throw std::invalid_argument("Invalid preset");
 }
 
+
 int createTimelapseHandler(int fps, int preset, int crf) {
 
+  // set parameters to defaults if invalid
+  fps = (fps > 0) ? fps : 60;
+  preset = (preset > 0 && preset <= 3) ? preset : 2;
+  crf = (crf > -1 && crf <= 51) ? crf : 23;
 
+  std::string fpsStr = std::to_string(fps);
+  std::string presetStr = getPreset(static_cast<Preset>(preset));
+  std::string crfStr = std::to_string(crf);
+
+  std::string frameInputPattern = (FRAME_PATH / "frame_%06d.jpg").string();
+
+  // get current time to identify timelapse
+  auto time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+
+  std::ostringstream oss;
+  oss << "timelapse_" << std::put_time(std::localtime(&time), "%m_%d_%Y_%H_%M_%S") << ".mp4";
+
+  std::string timelapseOutputPath = (TIMELAPSE_PATH / oss.str()).string();
+
+  std::cout << "Creating timelapse: " << timelapseOutputPath << std::endl;
+  std::cout << "Settings: fps=" << fps << ", preset=" << presetStr << ", crf=" << crf << std::endl;
+
+  pid_t pid = fork();
   
+  if (pid < 0) {
+    std::cerr << "Unable to fork process" << std::endl;
+    return -1;
+  }
+
+  // child process executes ffmpeg command
+  if (pid == 0) {
+    execl("/usr/bin/ffmpeg",
+        "ffmpeg",
+        "-framerate", fpsStr.c_str(),
+        "-i", frameInputPattern.c_str(),
+        "-c:v", "libx264",
+        "-preset", presetStr.c_str(),
+        "-crf", crfStr.c_str(),
+        "-pix_fmt", "yuv420p",
+        timelapseOutputPath.c_str(),
+        nullptr
+    );
+
+    std::cerr << "Exec'ing ffmpeg command failed: " << std::strerror(errno) << std::endl;
+    _exit(1);
+  }
+
+  int childStatus;
+  while (true) {
+
+    pid_t result = waitpid(pid, &childStatus, WNOHANG);
+
+    if (result < 0) {
+      std::cerr << "waitpid failed: " << std::strerror(errno) << std::endl;
+      return -1;
+    } 
+
+    // child process finished
+    if (result > 0) {
+
+      // if ended on its own
+      if (WIFEXITED(childStatus)) {
+
+        int err = WEXITSTATUS(childStatus);
+        if (!err) {
+          std::cout << "Timelapse successfully created: " << timelapseOutputPath << std::endl;
+          return 0;
+        } else {
+          std::cerr << "ffmpeg exited with code " << err << std::endl;
+          return err;
+        }
+
+      } else if (WIFSIGNALED(childStatus)) { // if signaled/interrupted
+        std::cout << "ffmpeg killed by signal " << WTERMSIG(childStatus) << std::endl;
+        return -1;
+      }
+    }
+
+    // check if flagged to stop
+    if (shouldCreateStop.load()) {
+
+      std::cout << "Stopping timelapse creation..." << std::endl;
+
+      kill(pid, SIGTERM);
+
+      // allow for ffmpeg to shut down
+      std::this_thread::sleep_for(2000ms);
+
+      // check if ffmpeg still running and force kill it if it was not shut down gracefully
+      int running = waitpid(pid, &childStatus, WNOHANG);
+      if (!running) {
+        std::cout << "Force killing ffmpeg" << std::endl;
+        kill(pid, SIGKILL);
+        waitpid(pid, &childStatus, 0);
+      }
+    }
+
+    std::cout << "Timelapse creation stopped" << std::endl;
+
+    std::this_thread::sleep_for(200ms);
+  }
 }

@@ -58,7 +58,7 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  err = timelapseHandler(timelapseLength, capInterval);
+  err = recordTimelapseHandler(timelapseLength, capInterval);
 
   return err;
 }
