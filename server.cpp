@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <csignal>
 
+
 extern std::atomic<bool> shouldStop;
 
 extern std::filesystem::path FRAME_PATH;
@@ -15,6 +16,7 @@ extern std::filesystem::path FRAME_PATH;
 static httplib::Server *globalServer = nullptr;
 
 
+// stops running camera process and then shuts down httplib server
 void shutdownServer() {
   shouldStop.store(true);
 
@@ -42,14 +44,20 @@ int main() {
   globalServer = &svr;
 
   std::unique_ptr<std::thread> camThread;
+  std::unique_ptr<std::thread> createTimelapseThread;
 
   std::atomic<bool> isCamRunning{false};
+  std::atomic<bool> isCreatingTimelapse{false};
 
-  svr.Get("/start-cam", [&isCamRunning, &camThread](const httplib::Request& req, httplib::Response& res) {
+
+  svr.Get("/start-cam", [&isCamRunning, &camThread, &isCreatingTimelapse](const httplib::Request& req, httplib::Response& res) {
     
     if (isCamRunning.load()) {
       std::cerr << "Camera has already been started." << std::endl;
-      res.set_content("Camera has already been started.", "text/plain");
+      res.set_content("Error: camera has already been started.\n", "text/plain");
+    } else if (isCreatingTimelapse.load()) {
+      std::cerr << "Cannot start camera while timelapse is being created." << std::endl; 
+      res.set_content("Error: cannot start camera while timelapse is being created.\n", "text/plain");
     } else {
 
       std::cout << "CAMERA STARTED by " << req.remote_addr << std::endl;
@@ -61,14 +69,12 @@ int main() {
 
       int length = 0;
       if (req.has_param("length")) {
-        std::string lengthStr = req.get_param_value("length");
-        length = std::stoi(lengthStr);
+        length = std::stoi(req.get_param_value("length"));
       }
 
       int capInterval = 0;
       if (req.has_param("cap-interval")) {
-        std::string intervalStr = req.get_param_value("cap-interval");
-        capInterval = std::stoi(intervalStr);
+        capInterval = std::stoi(req.get_param_value("cap-interval"));
       }
 
       isCamRunning.store(true);
@@ -84,6 +90,7 @@ int main() {
       res.set_content("Timelapse started\n", "text/plain");
     }
   });
+
 
   svr.Get("/stop-cam", [&isCamRunning](const httplib::Request& req, httplib::Response& res) {
     
@@ -101,20 +108,48 @@ int main() {
     }
   });
 
-  svr.Get("/create-timelapse", [&isCamRunning](const httplib::Request& req, httplib::Response& res) {
+
+  svr.Get("/create-timelapse", [&isCamRunning, &isCreatingTimelapse, &createTimelapseThread](const httplib::Request& req, httplib::Response& res) {
 
     if (isCamRunning.load()) {
       std::cerr << "Camera is currently running, cannot create timelapse" << std::endl;
       res.set_content("Error: cannot create timelapse, camera is currently running.\n", "text/plain");
+    } else if (isCreatingTimelapse.load()) {
+      std::cerr << "Cannot create timelapse while timelapse is already being created" << std::endl;
+      res.set_content("Error: cannot create timelapse, timelapse is already being created.\n", "text/plain");
     } else {
 
-      std::cout << "CREATING TIMELAPSE..." << std::endl;
+      int fps = 0;
+      int preset = 0;
+      int crf = -1;
 
+      if (req.has_param("fps")) {
+        fps = std::stoi(req.get_param_value("fps"));
+      }
+      if (req.has_param("preset")) {
+        preset = std::stoi(req.get_param_value("preset"));
+      }
+      if (req.has_param("crf")) {
+        crf = std::stoi(req.get_param_value("crf"));
+      }
+      
+      std::cout << "CREATING TIMELAPSE..." << std::endl;
+      res.set_content("Creating timelapse... this may take awhile\n", "text/plain");
+
+      isCreatingTimelapse.store(true);
+
+      createTimelapseThread = std::make_unique<std::thread>([fps, preset, crf, &isCreatingTimelapse]() {
+        int err = createTimelapseHandler(fps, preset, crf);
+        isCreatingTimelapse.store(false);
+
+        std::cout << "Timelapse creation finished with code " << err << std::endl;
+      });
 
       std::cout << "Succesfully created timelapse" << std::endl;
       res.set_content("Timelapse has been created\n", "text/plain");
     }
   });
+
 
   svr.Get("/clear-frames", [&isCamRunning](const httplib::Request& req, httplib::Response& res) {
     if (isCamRunning.load()) {
@@ -145,7 +180,7 @@ int main() {
       } else { // just remove frames if other files not specified
         
         for (const auto& file : std::filesystem::directory_iterator(FRAME_PATH)) {
-          if (file.is_regular_file() && file.path().extension() == ".yuv") {
+          if (file.is_regular_file() && file.path().extension() == ".jpg") {
             std::filesystem::remove(file.path());
           }
         }

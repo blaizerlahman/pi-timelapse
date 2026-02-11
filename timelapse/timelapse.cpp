@@ -309,7 +309,25 @@ int recordTimelapseHandler(int timelapseLength = 0, int capInterval = 0) {
 }
 
 
+enum class Preset : int {
+  Medium = 1,
+  Faster = 2,
+  VeryFast = 3
+};
+
+
+const std::string getPreset(Preset preset) {
+  switch (preset) {
+    case Preset::Medium: return "medium";
+    case Preset::Faster: return "faster";
+    case Preset::VeryFast: return "veryfast";
+  }
+
+  throw std::invalid_argument("Invalid preset");
+}
+
 int createTimelapseHandler(int fps, int preset, int crf) {
+
 
   
 }

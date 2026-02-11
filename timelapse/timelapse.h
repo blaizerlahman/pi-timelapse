@@ -24,7 +24,7 @@ int recordTimelapseHandler(int timelapseLength, int capInterval);
  * Creates timelapse using ffmpeg command and writers final mp4 to specified path.
  * @param fps Framerate used in ffpmeg command (default is 0 which evaluates to 60)
  * @param preset Speed preset corresponding to presets in ffmpeg command (default is 0 which evaluates to 2). Used to index enum (1 - medium, 2 - faster, 3 - veryfast)
- * @param crf Encoding mode that determines visual quality and file size (default is 0 which evaluates to 23)
+ * @param crf Encoding mode that determines visual quality and file size (default is -1 which evaluates to 23)
  * @return 0 on success, non-zero on error
  */
 int createTimelapseHandler(int fps, int preset, int crf);
