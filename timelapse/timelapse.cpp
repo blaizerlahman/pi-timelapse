@@ -427,10 +427,11 @@ int createTimelapseHandler(int fps, int preset, int crf) {
         kill(pid, SIGKILL);
         waitpid(pid, &childStatus, 0);
       }
+
+      shouldCreateStop.store(false);
+      return -1;
     }
 
-    std::cout << "Timelapse creation stopped" << std::endl;
-
-    std::this_thread::sleep_for(200ms);
+    std::this_thread::sleep_for(400ms);
   }
 }

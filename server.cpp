@@ -21,6 +21,7 @@ static httplib::Server *globalServer = nullptr;
 // stops running camera process and then shuts down httplib server
 void shutdownServer() {
   shouldRecordStop.store(true);
+  shouldCreateStop.store(true);
 
   if (globalServer) {
     globalServer->stop();
@@ -72,11 +73,15 @@ int main() {
       int length = 0;
       if (req.has_param("length")) {
         length = std::stoi(req.get_param_value("length"));
+      } else {
+        std::cout << "No length parameter specified" << std::endl;
       }
 
       int capInterval = 0;
       if (req.has_param("cap-interval")) {
         capInterval = std::stoi(req.get_param_value("cap-interval"));
+      } else {
+        std::cout << "No cap-interval parameter specified" << std::endl;
       }
 
       isCamRunning.store(true);
@@ -191,15 +196,12 @@ int main() {
 
       isCreatingTimelapse.store(true);
 
-      createTimelapseThread = std::make_unique<std::thread>([fps, preset, crf, &isCreatingTimelapse]() {
+      createTimelapseThread = std::make_unique<std::thread>([fps, preset, crf, &res, &isCreatingTimelapse]() {
         int err = createTimelapseHandler(fps, preset, crf);
         isCreatingTimelapse.store(false);
 
         std::cout << "Timelapse creation finished with code " << err << std::endl;
       });
-
-      std::cout << "Succesfully created timelapse" << std::endl;
-      res.set_content("Timelapse has been created\n", "text/plain");
     }
   });
 
@@ -224,14 +226,19 @@ int main() {
 
   svr.listen("0.0.0.0", 8000);
 
-  if (camThread) std::cout << "Server stopped, waiting for camera to finish..." << std::endl;
-
   if (camThread) {
     std::cout << "Server stopped, waiting for camera to finish..." << std::endl;
     if (camThread->joinable()) {
       camThread->join();
     }
     std::cout << "Camera shutdown complete." << std::endl;
+  }
+
+  if (createTimelapseThread) {
+    std::cout << "Server stopped, waiting for timelapse to finish..." << std::endl;
+    if (createTimelapseThread->joinable()) {
+      createTimelapseThread->join();
+    }
   }
 
   globalServer = nullptr;
