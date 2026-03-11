@@ -169,17 +169,20 @@ int main() {
       if (std::filesystem::is_empty(FRAME_PATH)) {
         std::cerr << "Cannot create timelapse, no frames in frame directory" << std::endl;
         res.set_content("Error: cannot create timelapse, there are no frames in frame directory.\n", "text/plain");
+        return;
       }
 
       // check if timelapse directory exists
-      if (std::filesystem::exists(TIMELAPSE_PATH) && std::filesystem::is_directory(TIMELAPSE_PATH)) {
+      if (!std::filesystem::exists(TIMELAPSE_PATH) || !std::filesystem::is_directory(TIMELAPSE_PATH)) {
         std::cerr << "Cannot create timelapse, the timelapse path does not point to an existing directory" << std::endl;
         res.set_content("Error: cannot create timelapse, the timelapse path does not point to an existing directory.\n", "text/plain");
+        return;
       }
 
       int fps = 0;
       int preset = 0;
       int crf = -1;
+      std::string requestedFilename = "";
 
       if (req.has_param("fps")) {
         fps = std::stoi(req.get_param_value("fps"));
@@ -190,14 +193,17 @@ int main() {
       if (req.has_param("crf")) {
         crf = std::stoi(req.get_param_value("crf"));
       }
+      if (req.has_param("filename")) {
+        requestedFilename = req.get_param_value("filename");
+      }
       
       std::cout << "CREATING TIMELAPSE..." << std::endl;
       res.set_content("Creating timelapse... this may take awhile\n", "text/plain");
 
       isCreatingTimelapse.store(true);
 
-      createTimelapseThread = std::make_unique<std::thread>([fps, preset, crf, &res, &isCreatingTimelapse]() {
-        int err = createTimelapseHandler(fps, preset, crf);
+      createTimelapseThread = std::make_unique<std::thread>([fps, preset, crf, requestedFilename, &res, &isCreatingTimelapse]() {
+        int err = createTimelapseHandler(fps, preset, crf, requestedFilename);
         isCreatingTimelapse.store(false);
 
         std::cout << "Timelapse creation finished with code " << err << std::endl;

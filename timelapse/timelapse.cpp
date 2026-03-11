@@ -330,7 +330,7 @@ const std::string getPreset(Preset preset) {
 }
 
 
-int createTimelapseHandler(int fps, int preset, int crf) {
+int createTimelapseHandler(int fps, int preset, int crf, std::string requestedFilename) {
 
   // set parameters to defaults if invalid
   fps = (fps > 0) ? fps : 60;
@@ -346,10 +346,17 @@ int createTimelapseHandler(int fps, int preset, int crf) {
   // get current time to identify timelapse
   auto time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
 
-  std::ostringstream oss;
-  oss << "timelapse_" << std::put_time(std::localtime(&time), "%m_%d_%Y_%H_%M_%S") << ".mp4";
+  std::string filename;
 
-  std::string timelapseOutputPath = (TIMELAPSE_PATH / oss.str()).string();
+  if (!requestedFilename.empty()) {
+    filename = (requestedFilename.ends_with(".mp4")) ? requestedFilename : requestedFilename + ".mp4";
+  } else {
+    std::ostringstream oss;
+    oss << "timelapse_" << std::put_time(std::localtime(&time), "%m_%d_%Y_%H_%M_%S") << ".mp4";
+    filename = oss.str();
+  }
+
+  std::string timelapseOutputPath = (TIMELAPSE_PATH / filename).string();
 
   std::cout << "Creating timelapse: " << timelapseOutputPath << std::endl;
   std::cout << "Settings: fps=" << fps << ", preset=" << presetStr << ", crf=" << crf << std::endl;
