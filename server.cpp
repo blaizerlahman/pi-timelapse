@@ -179,6 +179,11 @@ int main() {
         return;
       }
 
+      // join previous thread if it exists
+      if (createTimelapseThread && createTimelapseThread->joinable()) {
+        createTimelapseThread->join();
+      }
+
       int fps = 0;
       int preset = 0;
       int crf = -1;
