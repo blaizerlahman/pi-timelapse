@@ -42,6 +42,7 @@ void interruptHandler(int signum) {
 int main() {
 
   std::signal(SIGINT, interruptHandler);
+  std::signal(SIGHUP, interruptHandler);
 
   httplib::Server svr;
   globalServer = &svr;
