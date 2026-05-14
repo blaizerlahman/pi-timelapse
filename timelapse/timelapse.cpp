@@ -36,6 +36,9 @@ int HEIGHT = 1080;
 std::atomic<bool> shouldRecordStop{false};
 std::atomic<bool> shouldCreateStop{false};
 
+std::atomic<int> currFrameNo;
+std::atomic<int> totalFrames;
+
 std::mutex reqCompleteMutex;
 std::condition_variable reqCompleteCV;
 std::atomic<bool> requestCompleted{false};
@@ -263,8 +266,10 @@ int recordTimelapseHandler(int timelapseLength = 0, int capInterval = 0) {
     capInterval = (capInterval > 0) ? capInterval : CAP_INTERVAL;
     timelapseLength = (timelapseLength > 0) ? timelapseLength : TIMELAPSE_LENGTH;
 
-    const int totalFrames = (timelapseLength * 60 * 1000) / capInterval;
-    for (int i = 0; i < totalFrames && !shouldRecordStop.load(); i++) {
+    totalFrames.store((timelapseLength * 60 * 1000) / capInterval);
+    static int numFrames = totalFrames.load(); // so that you don't have to access a global atomic every loop (I mean we already are but this is one less)
+
+    for (int i = 0; i < numFrames && !shouldRecordStop.load(); i++) {
 
       auto startTime = std::chrono::steady_clock::now();
 
@@ -284,6 +289,8 @@ int recordTimelapseHandler(int timelapseLength = 0, int capInterval = 0) {
       auto timeLeft = std::chrono::milliseconds(capInterval) - timeSince;
 
       if (timeLeft > 0ms) std::this_thread::sleep_for(timeLeft);
+
+      currFrameNo.store(i);
     }
 
     if (shouldRecordStop.load()) {

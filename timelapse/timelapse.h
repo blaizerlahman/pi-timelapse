@@ -13,6 +13,10 @@ extern std::atomic<bool> shouldCreateStop;
 extern std::filesystem::path FRAME_PATH;
 extern std::filesystem::path TIMELAPSE_PATH;
 
+// to be used by server state
+extern std::atomic<int> currFrameNo;
+extern std::atomic<int> totalFrames;
+
 /**
  * Captures timelapse using system camera and writes frames to specified path.
  * @param timelapseLength Length of timelapse in minutes (default is 0 which evaluates to 24 hours)

@@ -12,11 +12,19 @@
 extern std::atomic<bool> shouldRecordStop;
 extern std::atomic<bool> shouldCreateStop;
 
+extern std::atomic<int> currFrameNo;
+extern std::atomic<int> totalFrames;
+
 extern std::filesystem::path FRAME_PATH;
 extern std::filesystem::path TIMELAPSE_PATH;
 
 static httplib::Server *globalServer = nullptr;
 
+struct ServerState {
+  std::atomic<bool> isCamRunning{false};
+  std::atomic<bool> isCreatingTimelapse{false};
+  std::atomic<bool> isDownloadingTimelapse{false};
+};
 
 // stops running camera process and then shuts down httplib server
 void shutdownServer() {
@@ -47,21 +55,18 @@ int main() {
   httplib::Server svr;
   globalServer = &svr;
 
+  ServerState state;
+
   std::unique_ptr<std::thread> camThread;
   std::unique_ptr<std::thread> createTimelapseThread;
 
-  std::atomic<bool> isCamRunning{false};
-  std::atomic<bool> isCreatingTimelapse{false};
-  std::atomic<bool> isDownloadingTimelapse{false};
-
-
-  svr.Get("/start-cam", [&isCamRunning, &camThread, &isCreatingTimelapse](const httplib::Request& req, httplib::Response& res) {
+  svr.Get("/start-cam", [&state, &camThread](const httplib::Request& req, httplib::Response& res) {
     
-    if (isCamRunning.load()) {
+    if (state.isCamRunning.load()) {
       res.status = 500;
       std::cerr << "Camera has already been started." << std::endl;
       res.set_content("Error: camera has already been started.\n", "text/plain");
-    } else if (isCreatingTimelapse.load()) {
+    } else if (state.isCreatingTimelapse.load()) {
       res.status = 500;
       std::cerr << "Cannot start camera while timelapse is being created." << std::endl; 
       res.set_content("Error: cannot start camera while timelapse is being created.\n", "text/plain");
@@ -88,12 +93,12 @@ int main() {
         std::cout << "No cap-interval parameter specified" << std::endl;
       }
 
-      isCamRunning.store(true);
+      state.isCamRunning.store(true);
       shouldRecordStop.store(false);
 
-      camThread = std::make_unique<std::thread>([length, capInterval, &isCamRunning]() {
+      camThread = std::make_unique<std::thread>([length, capInterval, &state]() {
           int err = recordTimelapseHandler(length, capInterval);
-          isCamRunning.store(false);
+          state.isCamRunning.store(false);
           
           std::cout << "Timelapse finished with code " << err << std::endl;
       });
@@ -103,9 +108,9 @@ int main() {
   });
 
 
-  svr.Get("/stop-cam", [&isCamRunning](const httplib::Request& req, httplib::Response& res) {
+  svr.Get("/stop-cam", [&state](const httplib::Request& req, httplib::Response& res) {
     
-    if (!isCamRunning.load()) {
+    if (!state.isCamRunning.load()) {
       res.status = 500;
       std::cerr << "No camera is currently running" << std::endl;
       res.set_content("Error: no camera is currently running.\n", "text/plain");
@@ -121,8 +126,8 @@ int main() {
   });
 
 
-  svr.Get("/clear-frames", [&isCamRunning](const httplib::Request& req, httplib::Response& res) {
-    if (isCamRunning.load()) {
+  svr.Get("/clear-frames", [&state](const httplib::Request& req, httplib::Response& res) {
+    if (state.isCamRunning.load()) {
       res.status = 500;
       std::cerr << "Frames attempted to clear while camera running" << std::endl;
       res.set_content("Error: cannot clear frames while camera is running.\n", "text/plain");
@@ -162,13 +167,13 @@ int main() {
   });
 
 
-  svr.Get("/create-timelapse", [&isCamRunning, &isCreatingTimelapse, &createTimelapseThread](const httplib::Request& req, httplib::Response& res) {
+  svr.Get("/create-timelapse", [&state, &createTimelapseThread](const httplib::Request& req, httplib::Response& res) {
 
-    if (isCamRunning.load()) {
+    if (state.isCamRunning.load()) {
       res.status = 500;
       std::cerr << "Camera is currently running, cannot create timelapse" << std::endl;
       res.set_content("Error: cannot create timelapse, camera is currently running.\n", "text/plain");
-    } else if (isCreatingTimelapse.load()) {
+    } else if (state.isCreatingTimelapse.load()) {
       res.status = 500;
       std::cerr << "Cannot create timelapse while timelapse is already being created" << std::endl;
       res.set_content("Error: cannot create timelapse, timelapse is already being created.\n", "text/plain");
@@ -216,11 +221,11 @@ int main() {
       std::cout << "CREATING TIMELAPSE..." << std::endl;
       res.set_content("Creating timelapse... this may take awhile\n", "text/plain");
 
-      isCreatingTimelapse.store(true);
+      state.isCreatingTimelapse.store(true);
 
-      createTimelapseThread = std::make_unique<std::thread>([fps, preset, crf, requestedFilename, &res, &isCreatingTimelapse]() {
+      createTimelapseThread = std::make_unique<std::thread>([&state, fps, preset, crf, requestedFilename, &res]() {
         int err = createTimelapseHandler(fps, preset, crf, requestedFilename);
-        isCreatingTimelapse.store(false);
+        state.isCreatingTimelapse.store(false);
 
         std::cout << "Timelapse creation finished with code " << err << std::endl;
       });
@@ -228,10 +233,10 @@ int main() {
   });
 
 
-  svr.Get("/stop-create", [&isCreatingTimelapse](const httplib::Request& req, httplib::Response& res) {
+  svr.Get("/stop-create", [&state](const httplib::Request& req, httplib::Response& res) {
     
     // check if timelapse is already being created and return an error if it is not
-    if (!isCreatingTimelapse.load()) {
+    if (!state.isCreatingTimelapse.load()) {
       res.status = 500;
       std::cerr << "No timelapse is currently being created" << std::endl;
       res.set_content("Error: no timelapse is currently being created.\n", "text/plain");
@@ -242,10 +247,10 @@ int main() {
     }
   });
 
-  svr.Get("/download-timelapse", [&isDownloadingTimelapse](const httplib::Request& req, httplib::Response& res) {
+  svr.Get("/download-timelapse", [&state](const httplib::Request& req, httplib::Response& res) {
     
     // check if timelapse is already being downloaded on client and return error if so
-    if (isDownloadingTimelapse.load()) {
+    if (state.isDownloadingTimelapse.load()) {
       res.status = 500;
       std::cerr << "Timelapse is currently being downloaded" << std::endl;
       res.set_content("Error: A timelapse is already being downloaded.\n", "text/plain");
@@ -291,7 +296,7 @@ int main() {
 
     auto filesize = std::filesystem::file_size(filepath);
 
-    isDownloadingTimelapse.store(true);
+    state.isDownloadingTimelapse.store(true);
 
     res.set_content_provider(
       filesize, 
@@ -316,11 +321,32 @@ int main() {
         return true;
       },
       // clear isDownloadingTimelapse once httplib is done with lambda (finished streaming)
-      [&isDownloadingTimelapse](bool success) {
-        isDownloadingTimelapse.store(false);
+      [&state](bool success) {
+        state.isDownloadingTimelapse.store(false);
       }
     );
 
+  });
+
+  svr.Get("/status", [&state](const httplib::Request& req, httplib::Response& res) {
+    std::cout << "Providing status" << std::endl;
+
+    std::string json;
+
+    if (state.isCamRunning.load()) {
+      json = std::format(
+	R"({{"status":"recording", "currentFrame":{},"totalFrames":{}}})", 
+	currFrameNo.load(), totalFrames.load()
+      );
+    //} else if (state.isCreatingTimelapse.load()) {
+      //json = std::format(
+//	R"({{"status":"creating", ""}})"		      
+  //    );
+    } else {
+      json = R"({{"status":"idle"}})";
+    }
+
+    res.set_content(json, "application/json");
   });
 
   svr.Get("/shutdown", [](const httplib::Request& req, httplib::Response& res) {
