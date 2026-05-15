@@ -21,6 +21,7 @@
 #include <csignal>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <fstream>
 
 #include <libcamera/libcamera.h>
 #include <libcamera/framebuffer.h>
@@ -49,6 +50,7 @@ int TIMELAPSE_LENGTH = 1440; // in min
 
 static std::shared_ptr<Camera> camera;
 
+std::filesystem::path PROGRESS_PATH = "/tmp/timelapse-creation-progress";
 
 // get path to where frames will be stored
 std::filesystem::path FRAME_PATH = [] {
@@ -69,6 +71,75 @@ std::filesystem::path TIMELAPSE_PATH = [] {
   return std::filesystem::path(timelapsePath);
 }();
 
+
+int readCreationProgress(ProgressBlock& block) {
+  
+  // seek to end of log file
+  std::ifstream file(PROGRESS_PATH, std::ios::ate);
+  std::streamoff position = file.tellg();
+
+  bool blockFound = false;
+
+  // go backwards through log until 'progress=continue' is found which denotes end of block
+  while (position > 0 && !blockFound) {
+    file.seekg(--position);
+    if (file.get() == '\n') {
+      std::streamoff save = file.tellg();
+      std::string line;
+      std::getline(file, line);
+      file.clear(); // clear failbit so seekg works
+      if (line == "progress=continue") {
+	position = save;
+	blockFound = true;
+      }
+      file.seekg(save);
+    }
+  }
+
+  // throw error if parsed whole file without finding block
+  if (!blockFound) {
+    std::cerr << "Error: End of progress block not found" << std::endl;
+    return 1;
+  }
+
+  int block_lines = 12;
+  int count = 0;
+
+  // now seek back to the beginning of the block
+  while (position > 0 && count < block_lines) {
+    file.seekg(--position);
+    if (file.get() == '\n') count++;
+  }
+
+  if (count < block_lines) { // throw error if not every line could be found
+    std::cerr << "Error: Start of progress block not found" << std::endl;
+    return 1;
+  }
+
+  if (position == 0) {
+    file.seekg(0);
+  } else {
+    file.seekg(position + 1); // seek past newline
+  }
+
+  std::vector<std::string> lines;
+  std::string line;
+
+  // get block lines
+  while (std::getline(file, line) && lines.size() < static_cast<size_t>(block_lines)) {
+    lines.push_back(line);
+  }
+
+  // TODO fix this so that it isn't hardcoded
+  // populate struct
+  block.frame     = lines[0].substr(6);
+  block.fps       = lines[1].substr(4);
+  block.bitrate   = lines[3].substr(8);
+  block.totalSize = lines[4].substr(11);
+  block.speed     = lines[10].substr(6);
+
+  return 0;
+} 
 
 static void requestComplete(Request *request) {
 
@@ -378,13 +449,15 @@ int createTimelapseHandler(int fps, int preset, int crf, std::string requestedFi
   // child process executes ffmpeg command
   if (pid == 0) {
     execl("/usr/bin/ffmpeg",
-        "ffmpeg",
+        "ffmpeg", 
+	"-y",
         "-framerate", fpsStr.c_str(),
         "-i", frameInputPattern.c_str(),
         "-c:v", "libx264",
         "-preset", presetStr.c_str(),
         "-crf", crfStr.c_str(),
         "-pix_fmt", "yuv420p",
+	"-progress", PROGRESS_PATH.c_str(),
         timelapseOutputPath.c_str(),
         nullptr
     );

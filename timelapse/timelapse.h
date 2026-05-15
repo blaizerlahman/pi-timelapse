@@ -17,6 +17,14 @@ extern std::filesystem::path TIMELAPSE_PATH;
 extern std::atomic<int> currFrameNo;
 extern std::atomic<int> totalFrames;
 
+struct ProgressBlock {
+  std::string frame;
+  std::string fps;
+  std::string bitrate;
+  std::string totalSize;
+  std::string speed;
+};
+
 /**
  * Captures timelapse using system camera and writes frames to specified path.
  * @param timelapseLength Length of timelapse in minutes (default is 0 which evaluates to 24 hours)
@@ -34,5 +42,12 @@ int recordTimelapseHandler(int timelapseLength, int capInterval);
  * @return 0 on success, non-zero on error
  */
 int createTimelapseHandler(int fps, int preset, int crf, std::string requestedFilename);
+
+/**
+ * Reads most recent (at time of calling) timelapse creation progress from file at PROGRESS_PATH and populates struct with progress dat.
+ * @param ProgressBlock An empty ProgressBlock struct to be populated by function
+ * @return 0 on success, non-zero on error
+ */
+int readCreationProgress(ProgressBlock& block);
 
 #endif

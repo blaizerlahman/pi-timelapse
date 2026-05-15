@@ -338,10 +338,21 @@ int main() {
 	R"({{"status":"recording", "currentFrame":{},"totalFrames":{}}})", 
 	currFrameNo.load(), totalFrames.load()
       );
-    //} else if (state.isCreatingTimelapse.load()) {
-      //json = std::format(
-//	R"({{"status":"creating", ""}})"		      
-  //    );
+    } else if (state.isCreatingTimelapse.load()) {
+
+      ProgressBlock block;
+
+      int err = readCreationProgress(block);
+      if (err) {
+        std::cerr << "Error reading creation progress" << std::endl;
+	res.set_content("Error: Could not read creation progress\n", "text/plain");
+	return;
+      }
+
+      json = std::format(
+	R"({{"status":"creating", "frame":{}, "fps":{}, "bitrate":{}, "total-current-size":{}, "encoding-speed":{}}})",
+	block.frame, block.fps, block.bitrate, block.totalSize, block.speed 
+      );
     } else {
       json = R"({{"status":"idle"}})";
     }
